@@ -23,16 +23,28 @@ void printString(char *args[])
     printf("\n");
 }
 
-int main()
+int main(int argc, char *argv[])
 {
     char buffer[MAX_CMD_BUFFER];
     char *args[MAX_CMD_BUFFER / 2];
     char lastCmd[MAX_CMD_BUFFER] = "";
+    FILE *file = NULL;
+
+    if (argc == 2) {
+        file = fopen(argv[1], "r"); //read the file
+    }
 
     while (1)
     {
+        // If there is a shell script file
+        if (file != NULL) {
+            fgets(buffer, 255, file);
+        }
+        // if not
+        else {
         printf("icsh $ ");
         fgets(buffer, 255, stdin);
+        }
 
         // When users give an empty command, your shell just give a new prompt.
         if (strlen(buffer) == 1)
