@@ -7,8 +7,11 @@
 #include "string.h"
 #include "stdlib.h"
 #include "unistd.h"
+#include "signal.h"
 
 #define MAX_CMD_BUFFER 255
+pid_t pid;
+pid_t fgPG;
 
 // Echo's helper function
 void printString(char *args[])
@@ -26,9 +29,10 @@ void printString(char *args[])
 
 void runForground(char *args[])
 {
+    int status_code;
     char *prog_argv[4];
     // create child process
-    pid_t pid = fork();
+    pid = fork();
 
     for (int i = 0; i < 4; i++)
     {
@@ -49,11 +53,21 @@ void runForground(char *args[])
     }
     else if (pid == 0) // child is sucessfully created
     {
-        execvp(prog_argv[0], prog_argv);
+        setpgid(0,0);
+        // tcsetpgrp(0,)
+        status_code = execvp(prog_argv[0], prog_argv);
+
+        if (status_code == -1) {
+            printf("bad command\n");
+            exit(1);
+        }
     }
     else // return to parent process
     {
+        setpgid(pid,pid);
+        fgPG = pid;
         waitpid(pid, NULL, 0);
+        fgPG = 0;
     }
 }
 
