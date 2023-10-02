@@ -11,7 +11,7 @@
 
 #define MAX_CMD_BUFFER 255
 pid_t pid;
-pid_t fgPG;
+pid_t foregroudPID; // foreground process id
 
 // Echo's helper function
 void printString(char *args[])
@@ -27,6 +27,7 @@ void printString(char *args[])
     printf("\n");
 }
 
+// Foreground job
 void runForground(char *args[])
 {
     int status_code;
@@ -51,28 +52,55 @@ void runForground(char *args[])
         perror("Fork failed");
         exit(1);
     }
-    else if (pid == 0) // child is sucessfully created
+    else if (!pid) // child is sucessfully created
     {
-        setpgid(0,0);
-        // tcsetpgrp(0,)
         status_code = execvp(prog_argv[0], prog_argv);
-
         if (status_code == -1) {
             printf("bad command\n");
-            exit(1);
         }
+        exit(1);
     }
-    else // return to parent process
+    else // Run in parent process
     {
-        setpgid(pid,pid);
-        fgPG = pid;
-        waitpid(pid, NULL, 0);
-        fgPG = 0;
+        foregroudPID = pid;
+        // Wait until the foreground process finished
+        waitpid(pid, &status_code, 0);
+        foregroudPID = 0;
     }
 }
 
+// SIGNAL HANDLER
+void sig_handler(int signum) {
+    /*Ctrl+Z*/
+    if (signum == SIGTSTP && foregroudPID) {
+        printf("PID: %d. Foreground process is stop(suspended).",foregroudPID);
+        kill(foregroudPID, SIGTSTP);
+        printf("\n");
+    }
+    /*Ctrl+C*/
+    else if (signum == SIGINT && foregroudPID) {
+        printf("PID: %d. Foreground process is killed.",foregroudPID);
+        kill(foregroudPID, SIGINT);
+        printf("\n");
+    }
+    else {
+        printf("\n");
+    }
+}
+
+
 int main(int argc, char *argv[])
 {
+    struct sigaction new_action;
+    sigemptyset(&new_action.sa_mask);
+    new_action.sa_handler = sig_handler;
+    new_action.sa_flags = 0;
+    /*Ctrl+Z*/
+    sigaction(SIGTSTP,&new_action, NULL);
+    /*Ctrl+C*/
+    sigaction(SIGINT,&new_action, NULL);
+
+
     char buffer[MAX_CMD_BUFFER];
     char *args[MAX_CMD_BUFFER / 2];
     char lastCmd[MAX_CMD_BUFFER] = "";
@@ -143,7 +171,13 @@ int main(int argc, char *argv[])
             // (until EOL) back to the console.
             if (strcmp(cmd, "echo") == 0)
             {
+                // echo $?
+                if (strcmp(args[1],"$?") == 0) {
+                    printf("%d\n",0);
+                }
+                else {
                 printString(args);
+                }
             }
             // exit <num> -- this command exits the shell with a given exit code.
             else if (strcmp(cmd, "exit") == 0)
