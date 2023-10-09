@@ -1,0 +1,15 @@
+.
+..
+.DS_Store
+.git
+.vscode
+Makefile
+README.md
+icsh
+icsh.c
+output.txt
+t.txt
+test
+test.c
+test.sh
+text

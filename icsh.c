@@ -8,10 +8,17 @@
 #include "stdlib.h"
 #include "unistd.h"
 #include "signal.h"
+#include "fcntl.h"
+#include "errno.h"
+#include "sys/types.h"
 
 #define MAX_CMD_BUFFER 255
 pid_t pid;
 pid_t foregroudPID; // foreground process id
+int isInOrOut = -1;
+int status_code;
+int isBgjob;
+int prevExitcode;
 
 // Echo's helper function
 void printString(char *args[])
@@ -28,39 +35,29 @@ void printString(char *args[])
 }
 
 // Foreground job
-void runForground(char *args[])
+void runForeground(char *args[])
 {
-    int status_code;
-    char *prog_argv[4];
-    // create child process
     pid = fork();
 
-    for (int i = 0; i < 4; i++)
+    // child is sucessfully created
+    if (pid == 0)
     {
-        if (args[i] != NULL)
-        {
-            prog_argv[i] = args[i];
-        }
-        else
-        {
-            prog_argv[i] = NULL;
-        }
-    }
-
-    if (pid < 0) //child is unsuccessful
-    {
-        perror("Fork failed");
-        exit(1);
-    }
-    else if (!pid) // child is sucessfully created
-    {
-        status_code = execvp(prog_argv[0], prog_argv);
+        status_code = execvp(args[0], args);
         if (status_code == -1) {
             printf("bad command\n");
         }
+        prevExitcode = 1;
         exit(1);
     }
-    else // Run in parent process
+    // child is unsuccessfully created
+    else if (pid < 0)
+    {
+        perror("Child is unsuccessfully created");
+        prevExitcode = 1;
+        exit(1);
+    }
+    // Run in parent process
+    else 
     {
         foregroudPID = pid;
         // Wait until the foreground process finished
@@ -88,6 +85,95 @@ void sig_handler(int signum) {
     }
 }
 
+// I/O Redirection
+void reDirect(char *args[]) {
+    /* if 0 , the output will be redirected to the spcific file = write
+       If 1 , the input will be redirected from the spcific file = read
+       3 Default file ids
+       0 -> stdin
+       1 -> stdout
+       2 -> stderr
+       */
+    int file;
+    char *fileName;
+    char *command[4];
+    int isEnd = 0;
+
+    // get command and file name
+    for (int i = 0; i < 4; i++)
+    {
+        if (args[i] != NULL) {
+            if ((strcmp(args[i],">"))==0 || (strcmp(args[i],"<")==0))
+            {
+                isEnd = 1;
+                command[i] = NULL;
+                fileName = args[i+1];
+            }
+            else 
+            {
+                command[i] = args[i];
+            }
+        }
+        else { // isEnd==1
+            command[i] = NULL;
+        }
+    }
+    
+    // Input
+    if (isInOrOut == 1) {
+        file = open (fileName, O_RDONLY);
+        if (file < 0) {
+            fprintf (stderr, "Couldn't open a file\n");
+            prevExitcode = errno;
+            exit (errno);
+        }
+        }
+    // Output
+    else if (isInOrOut==0){
+        file = open (fileName, O_TRUNC | O_CREAT | O_WRONLY, 0666);
+        if (file < 0) {
+            fprintf (stderr, "Couldn't open a file\n");
+            prevExitcode = errno;
+            exit (errno);
+        }
+    }
+    //Run foreground
+    pid = fork();
+
+    // child is sucessfully created
+    if (pid == 0) {
+        if (isInOrOut == 0) {
+            dup2(file, 1);
+        }
+        else {
+            dup2(file,0);
+        }
+        close(file);
+        // execute the command
+        execvp(command[0],command);
+        // if there is any error in execvp(), report
+        perror("bad command\n");
+        prevExitcode = 1;
+        exit(1);
+    }
+    // child is unsucessfully created
+    else if (pid < 0) {
+        perror("Child is unsuccessfully created");
+        prevExitcode = 1;
+        exit(1);
+    }
+    // Run in parent process
+    else {
+        // wait the child process to done
+        wait(&status_code);
+        close(file);
+    }
+
+}
+
+void runBackground(char *args[]) {
+
+}
 
 int main(int argc, char *argv[])
 {
@@ -99,7 +185,6 @@ int main(int argc, char *argv[])
     sigaction(SIGTSTP,&new_action, NULL);
     /*Ctrl+C*/
     sigaction(SIGINT,&new_action, NULL);
-
 
     char buffer[MAX_CMD_BUFFER];
     char *args[MAX_CMD_BUFFER / 2];
@@ -113,6 +198,7 @@ int main(int argc, char *argv[])
 
     while (1)
     {
+        int isRedir = 0;
         // If there is a shell script file
         if (file != NULL)
         {
@@ -149,31 +235,49 @@ int main(int argc, char *argv[])
                     printf("%s\n", buffer);
                 }
             }
+            // store the buffer into the lastCmd
             else
             {
-                // store the buffer into the lastCmd
                 strcpy(lastCmd, buffer);
             }
 
             // Tokenize the buffer
             char *token = strtok(buffer, " ");
+
             int i = 0;
             while (token != NULL)
             {
                 args[i] = token;
                 token = strtok(NULL, " ");
+                // if the STDIN contains < or > 
+                if (strcmp(args[i],">")==0) {
+                    isRedir = 1;
+                    isInOrOut = 0;
+                }
+                else if (strcmp(args[i],"<")==0) {
+                    isRedir = 1;
+                    isInOrOut = 1;
+                }
+                else if (strcmp(args[i],"&")==0) {
+                    isBgjob = 1;
+                }
                 i++;
             }
             args[i] = NULL;
             char *cmd = args[0];
 
+            // I/O Redirection -- redirect the file
+            if (isRedir) {
+                reDirect(args);
+                isRedir = 0;
+            }
             // echo <text> -- the echo command prints a given text
             // (until EOL) back to the console.
-            if (strcmp(cmd, "echo") == 0)
+            else if (strcmp(cmd, "echo") == 0)
             {
                 // echo $?
                 if (strcmp(args[1],"$?") == 0) {
-                    printf("%d\n",0);
+                    printf("%d\n",prevExitcode);
                 }
                 else {
                 printString(args);
@@ -183,22 +287,19 @@ int main(int argc, char *argv[])
             else if (strcmp(cmd, "exit") == 0)
             {
                 int exitCode = atoi(args[1]);
-                if (exitCode >= 0 && exitCode <= 255)
-                {
-                    printf("Good bye!\n");
-                    exit(exitCode);
-                }
                 // if the exit code is more than 255, truncate into 8 bit
-                else
+                if (exitCode < 255)
                 {
                     exitCode = exitCode >> 8;
-                    printf("Good bye!\n");
-                    exit(exitCode);
                 }
+                printf("Good bye!\n");
+                prevExitcode = exitCode;
+                exit(exitCode);
             }
+            // run foregroundJob -- running external program
             else
             {
-                runForground(args);
+                runForeground(args);
             }
         }
     }
