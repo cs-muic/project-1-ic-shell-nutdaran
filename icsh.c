@@ -18,7 +18,6 @@ pid_t foregroudPID; // foreground process id
 int isInOrOut = -1;
 int status_code;
 int isBgjob;
-int prevExitcode;
 
 // Echo's helper function
 void printString(char *args[])
@@ -46,14 +45,12 @@ void runForeground(char *args[])
         if (status_code == -1) {
             printf("bad command\n");
         }
-        prevExitcode = 1;
         exit(1);
     }
     // child is unsuccessfully created
     else if (pid < 0)
     {
         perror("Child is unsuccessfully created");
-        prevExitcode = 1;
         exit(1);
     }
     // Run in parent process
@@ -124,7 +121,6 @@ void reDirect(char *args[]) {
         file = open (fileName, O_RDONLY);
         if (file < 0) {
             fprintf (stderr, "Couldn't open a file\n");
-            prevExitcode = errno;
             exit (errno);
         }
         }
@@ -133,7 +129,6 @@ void reDirect(char *args[]) {
         file = open (fileName, O_TRUNC | O_CREAT | O_WRONLY, 0666);
         if (file < 0) {
             fprintf (stderr, "Couldn't open a file\n");
-            prevExitcode = errno;
             exit (errno);
         }
     }
@@ -153,13 +148,11 @@ void reDirect(char *args[]) {
         execvp(command[0],command);
         // if there is any error in execvp(), report
         perror("bad command\n");
-        prevExitcode = 1;
         exit(1);
     }
     // child is unsucessfully created
     else if (pid < 0) {
         perror("Child is unsuccessfully created");
-        prevExitcode = 1;
         exit(1);
     }
     // Run in parent process
@@ -277,7 +270,7 @@ int main(int argc, char *argv[])
             {
                 // echo $?
                 if (strcmp(args[1],"$?") == 0) {
-                    printf("%d\n",prevExitcode);
+                    printf("%d\n",0);
                 }
                 else {
                 printString(args);
@@ -293,8 +286,8 @@ int main(int argc, char *argv[])
                     exitCode = exitCode >> 8;
                 }
                 printf("Good bye!\n");
-                prevExitcode = exitCode;
                 exit(exitCode);
+            }
             }
             // run foregroundJob -- running external program
             else
