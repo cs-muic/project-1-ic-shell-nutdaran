@@ -13,11 +13,40 @@
 #include "sys/types.h"
 
 #define MAX_CMD_BUFFER 255
+#define MAX_CMD_CHAR 256
+#define MAX_JOB 100
+#define MAX_CMD 10
+#define MAX_PID 4194304 //64bit system
+
 pid_t pid;
 pid_t foregroudPID; // foreground process id
 int isInOrOut = -1;
 int status_code;
-int isBgjob;
+int isBgjob = 0;
+int cur = 1;
+int curJob;
+int prevJob;
+int prev_exit_code = 0;
+char bufferCopy[MAX_CMD_BUFFER] = "";
+
+void createJob(pid_t);
+char getSign(int);
+
+/*
+    job Status code:
+    0 => Running bg
+    1 => Running fg
+    2 => Stopped
+    */
+typedef struct {
+    int id;
+    char command[MAX_CMD_CHAR];
+    pid_t PID;
+    int jobStatus;
+} job;
+
+int listOfJob[MAX_JOB];
+job pidJobList[MAX_PID];
 
 // Echo's helper function
 void printString(char *args[])
@@ -33,11 +62,10 @@ void printString(char *args[])
     printf("\n");
 }
 
-// Foreground job
-void runForeground(char *args[])
+// External job
+void runExternal(char *args[])
 {
     pid = fork();
-
     // child is sucessfully created
     if (pid == 0)
     {
@@ -54,12 +82,61 @@ void runForeground(char *args[])
         exit(1);
     }
     // Run in parent process
-    else 
+    else
     {
         foregroudPID = pid;
         // Wait until the foreground process finished
         waitpid(pid, &status_code, 0);
         foregroudPID = 0;
+        prev_exit_code = WEXITSTATUS(status_code);
+    }
+}
+
+void runBackground(char *args[]) {
+    pid = fork();
+    // child is sucessfully created
+    if (pid == 0)
+    {
+        status_code = execvp(args[0], args);
+        if (status_code == -1) {
+            printf("bad command\n");
+        }
+        exit(1);
+    }
+    // child is unsuccessfully created
+    else if (pid < 0)
+    {
+        perror("Child is unsuccessfully created");
+        exit(1);
+    }
+    // Run in parent process
+    else
+    {
+        createJob(pid);
+    }
+    isBgjob = 0;
+}
+
+// BG child handler
+void child_handler(int sig, siginfo_t *sip, void *notused) {
+    int status = 0;
+    if (sip->si_pid == waitpid(sip->si_pid,&status, WNOHANG)) {
+        if (WIFEXITED(status)|| WTERMSIG(status)) {
+            job currentJob = pidJobList[sip->si_pid];
+            if (currentJob.jobStatus == 0 && currentJob.id)
+            {
+                char* cmd = currentJob.command;
+                cmd[strlen(currentJob.command) - 1] = '\0';
+                printf("\n[%d]  %c %d done       %s\n", currentJob.id,getSign(currentJob.id),sip->si_pid,cmd);
+                fflush(stdout);
+                listOfJob[currentJob.id - 1] = 0;
+                job emptyJob;
+                emptyJob.id = 0;
+                emptyJob.PID = 0;
+                pidJobList[pid] = emptyJob;
+                // printf("%d",listOfJob[currentJob.id]);
+            }
+        }
     }
 }
 
@@ -67,15 +144,13 @@ void runForeground(char *args[])
 void sig_handler(int signum) {
     /*Ctrl+Z*/
     if (signum == SIGTSTP && foregroudPID) {
-        printf("PID: %d. Foreground process is stop(suspended).",foregroudPID);
+        printf("PID: %d. Foreground process is stop(suspended).\n",foregroudPID);
         kill(foregroudPID, SIGTSTP);
-        printf("\n");
     }
     /*Ctrl+C*/
     else if (signum == SIGINT && foregroudPID) {
-        printf("PID: %d. Foreground process is killed.",foregroudPID);
+        printf("PID: %d. Foreground process is killed.\n",foregroudPID);
         kill(foregroudPID, SIGINT);
-        printf("\n");
     }
     else {
         printf("\n");
@@ -93,7 +168,7 @@ void reDirect(char *args[]) {
        */
     int file;
     char *fileName;
-    char *command[4];
+    char *command[MAX_CMD];
     int isEnd = 0;
 
     // get command and file name
@@ -123,7 +198,7 @@ void reDirect(char *args[]) {
             fprintf (stderr, "Couldn't open a file\n");
             exit (errno);
         }
-        }
+    }
     // Output
     else if (isInOrOut==0){
         file = open (fileName, O_TRUNC | O_CREAT | O_WRONLY, 0666);
@@ -132,6 +207,7 @@ void reDirect(char *args[]) {
             exit (errno);
         }
     }
+
     //Run foreground
     pid = fork();
 
@@ -161,15 +237,95 @@ void reDirect(char *args[]) {
         wait(&status_code);
         close(file);
     }
-
 }
 
-void runBackground(char *args[]) {
-
+void createJob(pid_t pid) {
+    job new_job;
+    strcpy(new_job.command,bufferCopy);
+    new_job.jobStatus = 0;
+    new_job.PID = pid;
+    prevJob = curJob;
+    
+    for (int i = 0; i < cur; i++) {
+        if (listOfJob[i] == 0) {
+            new_job.id = i+1;
+            curJob = i+1;
+            listOfJob[i] = pid;
+            break;
+        }
+        else if ((i+1) == cur) {
+            new_job.id = cur;
+            curJob = cur;
+            ++cur;
+        }
+    }
+    pidJobList[pid] = new_job;
+    printf("[%d] %d\n",new_job.id,new_job.PID);
 }
 
-int main(int argc, char *argv[])
-{
+char* getStatus(int status) {
+    switch (status) {
+        case 0:
+            return "Running";
+        case 2:
+            return "Stoppped";
+        default:
+            return " ";
+    }
+}
+
+char getSign(int pos) {
+    if (pos == curJob) { // current job
+        return '+';
+    }
+    else if (pos == prevJob) { // previous job
+        return '-';
+    }
+    else { // old jobs
+        return ' ';
+    }
+}
+
+void getJobList() {
+    int count = 0;
+    if (cur == 0) {
+        printf("--------- No Background jobs ---------\n");
+    }
+    else {
+        for (int i = 0; i < cur; i++)
+            {
+                int pid = listOfJob[i];
+                job Job = pidJobList[pid];
+                // printf("%d",pid);
+                if (Job.PID != 0) {
+                    printf("[%d]%c  %s                 %s\n",Job.id,getSign(Job.id),getStatus(Job.jobStatus),Job.command);
+                    ++count;
+                }
+            }
+        if (count == 0) {
+            printf("--------- No Background jobs ---------\n");
+        }
+    }
+}
+
+void printHelp() {
+    printf("#############################################\n");
+    printf("#     COMMAND     |        Description      #\n");
+    printf("#############################################\n");
+    printf("# echo <text>     |  print the line         #\n");
+    printf("# exit <num>      |  quit the shell         #\n");
+    printf("# !!              |  run the last cmd       #\n");
+    printf("# <file.sh>       |  execute script file    #\n");
+    printf("# <cmd>           |  run Foreground job     #\n");
+    printf("# ctrl+z          |  stop Foreground job    #\n");
+    printf("# ctrl+c          |  kill Foreground job    #\n");
+    printf("# <cmd> &         |  run Background job     #\n");
+    printf("# <cmd> > <file>  |  redirect output to file#\n");
+    printf("# <cmd> < <file>  |  take input from file   #\n");
+    printf("#############################################\n");
+}
+
+void init_handler() {
     struct sigaction new_action;
     sigemptyset(&new_action.sa_mask);
     new_action.sa_handler = sig_handler;
@@ -178,6 +334,17 @@ int main(int argc, char *argv[])
     sigaction(SIGTSTP,&new_action, NULL);
     /*Ctrl+C*/
     sigaction(SIGINT,&new_action, NULL);
+
+    struct sigaction action;
+    action.sa_sigaction = child_handler; /* Note use of sigaction, not handler */
+    sigfillset (&action.sa_mask);
+    action.sa_flags = SA_SIGINFO; /* Note flag,otherwise NULL in function*/
+    sigaction (SIGCHLD, &action, NULL);
+}
+
+int main(int argc, char *argv[])
+{
+    init_handler();
 
     char buffer[MAX_CMD_BUFFER];
     char *args[MAX_CMD_BUFFER / 2];
@@ -203,7 +370,7 @@ int main(int argc, char *argv[])
             printf("icsh $ ");
             fgets(buffer, 255, stdin);
         }
-
+        // printf("%s",buffer);
         // When users give an empty command, your shell just give a new prompt.
         if (strlen(buffer) == 1)
         {
@@ -225,13 +392,14 @@ int main(int argc, char *argv[])
                 {
                     // Replace the buffer with lastCmd and run it
                     strcpy(buffer, lastCmd);
-                    printf("%s\n", buffer);
+                    // printf("%s\n", buffer);
                 }
             }
             // store the buffer into the lastCmd
             else
             {
                 strcpy(lastCmd, buffer);
+                strcpy(bufferCopy,buffer);
             }
 
             // Tokenize the buffer
@@ -246,19 +414,22 @@ int main(int argc, char *argv[])
                 if (strcmp(args[i],">")==0) {
                     isRedir = 1;
                     isInOrOut = 0;
+                    break;
                 }
                 else if (strcmp(args[i],"<")==0) {
                     isRedir = 1;
                     isInOrOut = 1;
+                    break;
                 }
                 else if (strcmp(args[i],"&")==0) {
                     isBgjob = 1;
+                    args[i] = NULL; //remove &
                 }
                 i++;
             }
             args[i] = NULL;
             char *cmd = args[0];
-
+            
             // I/O Redirection -- redirect the file
             if (isRedir) {
                 reDirect(args);
@@ -288,11 +459,26 @@ int main(int argc, char *argv[])
                 printf("Good bye!\n");
                 exit(exitCode);
             }
+            // Banckground job
+            else if (isBgjob) {
+                runBackground(args);
+            }
+            else if (strcmp(cmd, "jobs") == 0) {
+                getJobList();
+            }
+            else if (strcmp(cmd,"fg")==0) {
+
+            }
+            else if (strcmp(cmd,"bg")==0) {
+
+            }
+            else if (strcmp(cmd,"help")==0){
+                printHelp();
             }
             // run foregroundJob -- running external program
             else
             {
-                runForeground(args);
+                runExternal(args);
             }
         }
     }
