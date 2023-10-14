@@ -137,8 +137,17 @@ void child_handler(int sig, siginfo_t *sip, void *notused) {
                 // printf("%d",listOfJob[currentJob.id]);
             }
         }
+        else if (WIFSTOPPED(status)){
+            job currentJob = pidJobList[sip->si_pid];
+            if (currentJob.jobStatus == 0) {
+                printf("\n[%d]  %c %d stopped       %s\n", currentJob.id, getSign(currentJob.id), sip->si_pid, currentJob.command);
+                fflush(stdout);
+                currentJob.jobStatus = 2;
+            }
+        }
     }
 }
+
 
 // SIGNAL HANDLER
 void sig_handler(int signum) {
@@ -341,6 +350,7 @@ void init_handler() {
     action.sa_flags = SA_SIGINFO; /* Note flag,otherwise NULL in function*/
     sigaction (SIGCHLD, &action, NULL);
 }
+
 
 int main(int argc, char *argv[])
 {
